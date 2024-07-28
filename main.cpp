@@ -64,16 +64,6 @@ void disassemble(const std::vector<uint8_t>& code, const long address) {
     cs_close(&handle);
 }
 
-void run_target(const char* target_name) {
-    std::cout << "Target program (" << target_name << ") is being run" << std::endl;
-    if (ptrace(PTRACE_TRACEME, 0, NULL, NULL) < 0) {
-        perror("ptrace");
-        return;
-    }
-
-    execl(target_name, target_name, NULL);
-}
-
 long int swapBytes64(long value) {
     return ((value >> 56) & 0x00000000000000FF) |
            ((value >> 40) & 0x000000000000FF00) |
@@ -84,11 +74,6 @@ long int swapBytes64(long value) {
            ((value << 40) & 0x00FF000000000000) |
            ((value << 56) & 0xFF00000000000000);
 }
-
-struct debug_breakpoint_t {
-    long addr = 0;
-    long orig_data = 0;
-};
 
 std::string get_RIP_data(pid_t child_pid, long& address) {
     user_regs_struct regs;
@@ -130,49 +115,24 @@ void print_near_code(pid_t child_pid) {
     disassemble(code, address);
 }
 
-void create_breakpoint(pid_t child_pid, debug_breakpoint_t& breakpoint_info) {
-    breakpoint_info.orig_data = ptrace(PTRACE_PEEKTEXT, child_pid, breakpoint_info.addr, 0);
-    ptrace(PTRACE_POKETEXT, child_pid, breakpoint_info.addr,
-        (breakpoint_info.orig_data & ~0xFF) | 0xCC);
-}
+class Printer {
 
-void remove_breakpoint(pid_t child_pid, debug_breakpoint_t breakpoint_info) {
-    ptrace(PTRACE_POKETEXT, child_pid, breakpoint_info.addr);
-}
+};
 
-std::vector<debug_breakpoint_t> break_points;
 
-//int continue_func(pid_t child_pid, int wait_status) {
-//    ptrace(PTRACE_CONT, child_pid, 0, 0);
-//    wait(&wait_status);
-//
-//    if(!WIFSTOPPED(wait_status))
-//        return 1;
-//
-//    // Else: Breakpoint was triggered
-//    user_regs_struct regs;
-//    ptrace(PTRACE_GETREGS, child_pid, 0, &regs);
-//    --regs.rip;
-//    ptrace(PTRACE_SETREGS, child_pid, 0, &regs);
-//
-//    std::cout << "Child stopped at the address: 0x" << std::hex << regs.rip << std::endl;
-//    const auto bp_to_remove = std::find_if(break_points.begin(), break_points.end(),
-//        [&](debug_breakpoint_t bp) {
-//            return regs.rip == reinterpret_cast<long>(bp.addr);
-//        });
-//    remove_breakpoint(child_pid, *bp_to_remove);
-//    break_points.erase(bp_to_remove);
-//    print_near_code(child_pid);
-//
-//    return 0;
-//}
 
 class Debugger {
+    struct Breakpoint {
+        long addr = 0;
+        long orig_data = 0;
+    };
+
     Debugger() = default;
 
     long child_process_return_address = 0;
     pid_t child_pid = 0;
     int wait_status = 0;
+    std::vector<Breakpoint> break_points;
 
     enum class UserCommands {
         SetBreakPoint,
@@ -212,51 +172,65 @@ class Debugger {
         child_process_return_address = ptrace(PTRACE_PEEKDATA, child_pid, (void*)regs.rsp, nullptr);
     }
 
-    int continue_func() {
-        ptrace(PTRACE_CONT, child_pid, 0, 0);
-        wait(&wait_status);
+    void create_breakpoint(Breakpoint breakpoint_info) {
+        breakpoint_info.orig_data = ptrace(PTRACE_PEEKTEXT, child_pid, breakpoint_info.addr, 0);
+        ptrace(PTRACE_POKETEXT, child_pid, breakpoint_info.addr,
+            (breakpoint_info.orig_data & ~0xFF) | 0xCC);
+        break_points.emplace_back(breakpoint_info);
+    }
 
-        if(!WIFSTOPPED(wait_status))
-            return 1;
+    void remove_breakpoint(pid_t child_pid, Breakpoint breakpoint_info) {
+        ptrace(PTRACE_POKETEXT, child_pid, breakpoint_info.addr);
+    }
 
-        // Else: Breakpoint was triggered
+    void await_breakpoint() {
+        // Breakpoint was triggered
         user_regs_struct regs;
         ptrace(PTRACE_GETREGS, child_pid, 0, &regs);
         --regs.rip;
         ptrace(PTRACE_SETREGS, child_pid, 0, &regs);
 
-        std::cout << "Child stopped at the address: 0x" << std::hex << regs.rip << std::endl;
         const auto bp_to_remove = std::find_if(break_points.begin(), break_points.end(),
-            [&](debug_breakpoint_t bp) {
-                return regs.rip == reinterpret_cast<long>(bp.addr);
+            [&regs](const Breakpoint bp) {
+                return regs.rip == bp.addr;
             });
         remove_breakpoint(child_pid, *bp_to_remove);
         break_points.erase(bp_to_remove);
+
         print_near_code(child_pid);
+    }
+
+    void user_set_breakpoint() {
+        Breakpoint break_point;
+        std::cout << "Input bp address: ";
+        std::cin >> std::hex >> break_point.addr;
+
+        create_breakpoint(break_point);
+    }
+
+    int continue_func() {
+        ptrace(PTRACE_CONT, child_pid, 0, 0);
+        wait(&wait_status);
+
+        // TODO: Create function for this
+        if(!WIFSTOPPED(wait_status))
+            return 1;
+
+        await_breakpoint();
 
         return 0;
     }
 
-    void set_breakpoint() {
-        debug_breakpoint_t temp_break_point;
-        std::cout << "Input bp address: ";
-        std::cin >> std::hex >> temp_break_point.addr;
-
-        create_breakpoint(child_pid, temp_break_point);
-        break_points.emplace_back(temp_break_point);
-    }
-
     int step_out() {
-        struct user_regs_struct regs;
+        user_regs_struct regs;
         ptrace(PTRACE_GETREGS, child_pid, nullptr, &regs);
         const auto return_address = ptrace(PTRACE_PEEKDATA, child_pid, (void*)regs.rsp, nullptr);
 
         if(return_address != child_process_return_address) {
-            debug_breakpoint_t temp_break_point;
+            Breakpoint temp_break_point;
             temp_break_point.addr = return_address;
 
-            create_breakpoint(child_pid, temp_break_point);
-            break_points.emplace_back(temp_break_point);
+            create_breakpoint(temp_break_point);
         }
 
         if(continue_func()) {
@@ -266,14 +240,14 @@ class Debugger {
     }
 
     int step_in() {
-        /* Make the child execute another instruction */
         if (ptrace(PTRACE_SINGLESTEP, child_pid, 0, 0) < 0) {
             std::cerr << "ptrace" << std::endl;
             return 1;
         }
-
         /* Wait for child to stop on its next instruction */
         wait(&wait_status);
+
+        // TODO:
         if(!WIFSTOPPED(wait_status))
             return 1;
 
@@ -282,17 +256,16 @@ class Debugger {
     }
 
     int step_over() {
-        const auto info = get_next_instruction_info(child_pid);
-        std::cout << "Command: " << info.mnemonic << ", size: " << info.size << std::endl;
+        const auto next_instruction_info = get_next_instruction_info(child_pid);
 
-        if(info.mnemonic == "call") {
+        if(next_instruction_info.mnemonic == "call") {
             user_regs_struct regs;
             ptrace(PTRACE_GETREGS, child_pid, 0, &regs);
 
-            debug_breakpoint_t temp_break_point;
-            temp_break_point.addr = regs.rip + info.size;
+            Breakpoint temp_break_point;
+            temp_break_point.addr = regs.rip + next_instruction_info.size;
 
-            create_breakpoint(child_pid, temp_break_point);
+            create_breakpoint(temp_break_point);
             break_points.emplace_back(temp_break_point);
 
             if(continue_func()) {
@@ -307,8 +280,8 @@ class Debugger {
 
     void show_breakpoints() {
         std::cout << "List of breakpoints: " << std::endl;
-        for(const auto& it : break_points) {
-            std::cout << "Address: " << std::hex << it.addr << std::endl;
+        for(const auto&[addr, orig_data] : break_points) {
+            std::cout << "Address: " << std::hex << addr << std::endl;
         }
     }
 
@@ -320,8 +293,8 @@ public:
     }
 
     int run() {
-        int wait_status;
         wait(&wait_status);
+        // Check wait_status value;
 
         define_child_process_return_address();
 
@@ -331,10 +304,10 @@ public:
 
         while (true) {
             std::cin >> user_input;
-            const auto user_command = convert_user_input_to_UserCommands(user_input);
-            switch (user_command) {
+
+            switch (convert_user_input_to_UserCommands(user_input)) {
                 case UserCommands::SetBreakPoint : {
-                    set_breakpoint();
+                    user_set_breakpoint();
                     break;
                 }
                 case UserCommands::ContinueExecution : {
@@ -371,16 +344,30 @@ public:
     }
 };
 
+void run_target(const char* target_name) {
+    if (ptrace(PTRACE_TRACEME, 0, nullptr, nullptr) < 0) {
+        perror("ptrace");
+        return;
+    }
+
+    // TODO: Do we need nullptr?
+    execl(target_name, target_name, nullptr);
+}
+
 int main(int argc, char* argv[]) {
+    if(argc != 2) {
+        std::cout << "Wrong input" << std::endl;
+    }
+
     pid_t child_pid = fork();
     if (child_pid == 0) {
-        // This is the child process
         run_target(argv[1]);
-    } else if (child_pid > 0) {
-        // This is the parent process
+    }
+    else if (child_pid > 0) {
         Debugger debugger = Debugger::instance(child_pid);
         debugger.run();
-    } else {
+    }
+    else {
         perror("fork");
         return -1;
     }
