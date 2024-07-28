@@ -85,10 +85,11 @@ class Debugger {
     };
 
     void print_near_code() {
-        const auto [instructions, number_of_instr] = Utilities::disassemble(
-            get_next_instructions(number_of_instructions_to_show), get_RIP(), 20);
+        const auto [instructions, number_of_read_instr] = Utilities::disassemble(
+            get_next_instructions(number_of_instructions_to_show), get_RIP(),
+            number_of_instructions_to_show);
 
-        for (size_t i = 0; i < number_of_instr; i++) {
+        for (size_t i = 0; i < number_of_read_instr; i++) {
             std::cout << "0x" << std::hex << instructions[i].address << ":\t";
             std::cout << instructions[i].mnemonic << "\t" << instructions[i].op_str << std::endl;
         }
@@ -183,7 +184,6 @@ class Debugger {
 
     void user_set_breakpoint() {
         Breakpoint break_point;
-        std::cout << "Input bp address: ";
         std::cin >> std::hex >> break_point.addr;
 
         create_breakpoint(break_point);
@@ -240,7 +240,7 @@ class Debugger {
         const auto [next_instruction_info, n] =
             Utilities::disassemble(get_next_instructions(1), get_RIP(), 1);
 
-        if(next_instruction_info[0].mnemonic == "call") {
+        if(std::strcmp(next_instruction_info[0].mnemonic, "call") == 0) {
             user_regs_struct regs {};
             ptrace(PTRACE_GETREGS, child_pid, 0, &regs);
 
@@ -353,6 +353,5 @@ int main(int argc, char* argv[]) {
         perror("fork");
         return -1;
     }
-
     return 0;
 }
