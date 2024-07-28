@@ -119,15 +119,15 @@ std::string get_RIP_data(pid_t child_pid, long& address) {
     return rip_commands;
 }
 
+cs_insn get_next_instruction_info(pid_t child_pid) {
+    long address = 0;
+    return disassemble_one_instruction(hexStringToBytes(get_RIP_data(child_pid, address)));
+}
+
 void print_near_code(pid_t child_pid) {
     long address = 0;
     const auto code = hexStringToBytes(get_RIP_data(child_pid, address));
     disassemble(code, address);
-}
-
-cs_insn get_one_instruction_info(pid_t child_pid) {
-    long address = 0;
-    return disassemble_one_instruction(hexStringToBytes(get_RIP_data(child_pid, address)));
 }
 
 void create_breakpoint(pid_t child_pid, debug_breakpoint_t& breakpoint_info) {
@@ -167,10 +167,128 @@ int continue_func(pid_t child_pid, int wait_status) {
     return 0;
 }
 
+class Debugger {
+private:
+    Debugger() = default;
+
+    long child_process_return_address = 0;
+    pid_t child_pid = 0;
+
+    void define_child_process_return_address() {
+        user_regs_struct regs;
+        ptrace(PTRACE_GETREGS, child_pid, nullptr, &regs);
+        child_process_return_address = ptrace(PTRACE_PEEKDATA, child_pid, (void*)regs.rsp, nullptr);
+    }
+
+public:
+    static Debugger instance(const pid_t child_pid) {
+        static Debugger debugger;
+        debugger.child_pid = child_pid;
+        return debugger;
+    }
+
+    void run() {
+        define_child_process_return_address();
+
+        int wait_status;
+        std::cout << "debugger start" << std::endl;
+
+
+
+        /* Wait for child to stop on its first instruction */
+        wait(&wait_status);
+        print_near_code(child_pid);
+
+        std::string user_command;
+
+        while (true) {
+            std::cin >> user_command;
+            if(user_command == "bp") {
+                debug_breakpoint_t temp_break_point;
+                std::cout << "Input bp address: ";
+                std::cin >> std::hex >> temp_break_point.addr;
+
+                create_breakpoint(child_pid, temp_break_point);
+                break_points.emplace_back(temp_break_point);
+            }
+
+            if(user_command == "c") {
+                if(continue_func(child_pid, wait_status)) {
+                    break;
+                }
+            }
+
+            if(user_command == "sout") {
+                struct user_regs_struct regs;
+                ptrace(PTRACE_GETREGS, child_pid, nullptr, &regs);
+                const auto return_address = ptrace(PTRACE_PEEKDATA, child_pid, (void*)regs.rsp, nullptr);
+
+                if(return_address != child_process_return_address) {
+                    debug_breakpoint_t temp_break_point;
+                    temp_break_point.addr = return_address;
+
+                    create_breakpoint(child_pid, temp_break_point);
+                    break_points.emplace_back(temp_break_point);
+                }
+
+                if(continue_func(child_pid, wait_status)) {
+                    break;
+                }
+            }
+
+            if(user_command == "si") {
+                /* Make the child execute another instruction */
+                if (ptrace(PTRACE_SINGLESTEP, child_pid, 0, 0) < 0) {
+                    std::cerr << "ptrace" << std::endl;
+                    return;
+                }
+
+                /* Wait for child to stop on its next instruction */
+                wait(&wait_status);
+                if(!WIFSTOPPED(wait_status))
+                    break;
+
+                print_near_code(child_pid);
+            }
+
+            if(user_command == "so") {
+                const auto info = get_next_instruction_info(child_pid);
+                std::cout << "Command: " << info.mnemonic << ", size: " << info.size << std::endl;
+
+                user_regs_struct regs;
+                ptrace(PTRACE_GETREGS, child_pid, 0, &regs);
+
+                debug_breakpoint_t temp_break_point;
+                temp_break_point.addr = regs.rip + info.size;
+
+                create_breakpoint(child_pid, temp_break_point);
+                break_points.emplace_back(temp_break_point);
+
+                if(continue_func(child_pid, wait_status)) {
+                    break;
+                }
+            }
+
+            if(user_command == "l") {
+                std::cout << "List of breakpoints: " << std::endl;
+                for(const auto& it : break_points) {
+                    std::cout << "Address: " << std::hex << it.addr << std::endl;
+                }
+            }
+        }
+    }
+};
+
+long main_return_address = 0;
 void run_debugger(pid_t child_pid)
 {
     int wait_status;
     std::cout << "debugger start" << std::endl;
+
+    // Define main return address
+    struct user_regs_struct regs;
+    ptrace(PTRACE_GETREGS, child_pid, nullptr, &regs);
+    main_return_address = ptrace(PTRACE_PEEKDATA, child_pid, (void*)regs.rsp, nullptr);
 
     /* Wait for child to stop on its first instruction */
     wait(&wait_status);
@@ -195,6 +313,24 @@ void run_debugger(pid_t child_pid)
             }
         }
 
+        if(user_command == "sout") {
+            struct user_regs_struct regs;
+            ptrace(PTRACE_GETREGS, child_pid, nullptr, &regs);
+            const auto return_address = ptrace(PTRACE_PEEKDATA, child_pid, (void*)regs.rsp, nullptr);
+
+            if(return_address != main_return_address) {
+                debug_breakpoint_t temp_break_point;
+                temp_break_point.addr = return_address;
+
+                create_breakpoint(child_pid, temp_break_point);
+                break_points.emplace_back(temp_break_point);
+            }
+
+            if(continue_func(child_pid, wait_status)) {
+                break;
+            }
+        }
+
         if(user_command == "si") {
             /* Make the child execute another instruction */
             if (ptrace(PTRACE_SINGLESTEP, child_pid, 0, 0) < 0) {
@@ -211,7 +347,7 @@ void run_debugger(pid_t child_pid)
         }
 
         if(user_command == "so") {
-            const auto info = get_one_instruction_info(child_pid);
+            const auto info = get_next_instruction_info(child_pid);
             std::cout << "Command: " << info.mnemonic << ", size: " << info.size << std::endl;
 
             user_regs_struct regs;
