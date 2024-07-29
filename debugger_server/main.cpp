@@ -80,6 +80,7 @@ class Debugger {
         StepOver,
         ShowBreakPoints,
         ShowRegistersState,
+        Help,
         InvalidCommand
     };
 
@@ -102,10 +103,12 @@ class Debugger {
             return;
         }
 
+        std::cout << "---------------------------------------------------------------" << std::endl;
         for (size_t i = 0; i < number_of_read_instr; i++) {
             std::cout << "0x" << std::hex << instructions[i].address << ":\t";
             std::cout << instructions[i].mnemonic << "\t" << instructions[i].op_str << std::endl;
         }
+        std::cout << "---------------------------------------------------------------" << std::endl;
 
         cs_free(instructions, number_of_read_instr);
     }
@@ -142,26 +145,29 @@ class Debugger {
     }
 
     UserCommands convert_user_input_to_UserCommands(const std::string& user_input) {
-        if(user_input == "bp") {
+        if(user_input == "set_breakpoint") {
             return UserCommands::SetBreakPoint;
         }
-        if(user_input == "c") {
+        if(user_input == "continue") {
             return UserCommands::ContinueExecution;
         }
-        if(user_input == "sout") {
+        if(user_input == "step_out") {
             return UserCommands::StepOut;
         }
-        if(user_input == "si") {
+        if(user_input == "step_in") {
             return UserCommands::StepIn;
         }
-        if(user_input == "so") {
+        if(user_input == "step_over") {
             return UserCommands::StepOver;
         }
-        if(user_input == "l") {
+        if(user_input == "bp_list") {
             return UserCommands::ShowBreakPoints;
         }
-        if(user_input == "show") {
+        if(user_input == "show_state") {
             return UserCommands::ShowRegistersState;
+        }
+        if(user_input == "help") {
+            return UserCommands::Help;
         }
         return UserCommands::InvalidCommand;
     }
@@ -322,6 +328,18 @@ public:
         return debugger;
     }
 
+    void print_help() {
+        std::cout << "List of available commands: " << std::endl;
+        std::cout << "\tset_breakpoint [address]" << std::endl;
+        std::cout << "\tcontinue" << std::endl;
+        std::cout << "\tstep_out" << std::endl;
+        std::cout << "\tstep_in" << std::endl;
+        std::cout << "\tstep_over" << std::endl;
+        std::cout << "\tbp_list" << std::endl;
+        std::cout << "\tshow_state" << std::endl;
+        std::cout << "\thelp" << std::endl;
+    }
+
     void run() {
         wait(&child_status);
         if(!is_child_process_alive()) {
@@ -372,8 +390,12 @@ public:
                     show_breakpoints();
                     break;
                 }
-                case UserCommands::ShowRegistersState: {
+                case UserCommands::ShowRegistersState : {
                     show_registers_state();
+                    break;
+                }
+                case UserCommands::Help : {
+                    print_help();
                     break;
                 }
                 default:

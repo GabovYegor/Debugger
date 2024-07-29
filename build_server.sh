@@ -19,4 +19,6 @@ git checkout v5
 cd ..
 
 # Build
+cd debugger_server
 cmake -S ./ -B debugger_server_output && cmake --build debugger_server_output/
+cd ..
