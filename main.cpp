@@ -70,8 +70,8 @@ class Debugger {
     pid_t child_pid = 0;
     int child_status = 0;
     std::vector<Breakpoint> break_points;
-    constexpr size_t max_instruction_size = 15;
-    constexpr size_t number_of_instructions_to_show = 20;
+    static constexpr size_t max_instruction_size = 15;
+    static constexpr size_t number_of_instructions_to_show = 20;
 
     enum class UserCommands {
         SetBreakPoint,
@@ -80,13 +80,24 @@ class Debugger {
         StepIn,
         StepOver,
         ShowBreakPoints,
+        ShowRegistersState,
         InvalidCommand
     };
 
     void print_near_code() {
+        // Remove breakpoints for corrent print
+        for(const auto& it : break_points) {
+            remove_breakpoint(it);
+        }
+
         const auto [instructions, number_of_read_instr] = Utilities::disassemble(
             get_next_instructions(number_of_instructions_to_show), get_RIP(),
             number_of_instructions_to_show);
+
+        // Recover breakpoints
+        for(const auto& it : break_points) {
+            create_breakpoint(it);
+        }
 
         if(instructions == nullptr) {
             return;
@@ -96,6 +107,8 @@ class Debugger {
             std::cout << "0x" << std::hex << instructions[i].address << ":\t";
             std::cout << instructions[i].mnemonic << "\t" << instructions[i].op_str << std::endl;
         }
+
+        cs_free(instructions, number_of_read_instr);
     }
 
     unsigned long long get_RIP() {
@@ -148,6 +161,9 @@ class Debugger {
         if(user_input == "l") {
             return UserCommands::ShowBreakPoints;
         }
+        if(user_input == "show") {
+            return UserCommands::ShowRegistersState;
+        }
         return UserCommands::InvalidCommand;
     }
 
@@ -157,14 +173,19 @@ class Debugger {
         child_process_return_address = ptrace(PTRACE_PEEKDATA, child_pid, (void*)regs.rsp, nullptr);
     }
 
-    void create_breakpoint(Breakpoint breakpoint_info) {
+    Breakpoint create_breakpoint(Breakpoint breakpoint_info) {
         breakpoint_info.orig_data = ptrace(PTRACE_PEEKTEXT, child_pid, breakpoint_info.addr, 0);
         ptrace(PTRACE_POKETEXT, child_pid, breakpoint_info.addr,
             (breakpoint_info.orig_data & ~0xFF) | 0xCC);
+        return breakpoint_info;
+    }
+
+    void create_breakpoint_and_save(Breakpoint breakpoint_info) {
+        breakpoint_info = create_breakpoint(breakpoint_info);
         break_points.emplace_back(breakpoint_info);
     }
 
-    void remove_breakpoint(pid_t child_pid, Breakpoint breakpoint_info) {
+    void remove_breakpoint(Breakpoint breakpoint_info) {
         ptrace(PTRACE_POKETEXT, child_pid, breakpoint_info.addr);
     }
 
@@ -179,7 +200,7 @@ class Debugger {
             [&regs](const Breakpoint bp) {
                 return regs.rip == bp.addr;
             });
-        remove_breakpoint(child_pid, *bp_to_remove);
+        remove_breakpoint(*bp_to_remove);
         break_points.erase(bp_to_remove);
 
         print_near_code();
@@ -189,7 +210,7 @@ class Debugger {
         Breakpoint break_point;
         std::cin >> std::hex >> break_point.addr;
 
-        create_breakpoint(break_point);
+        create_breakpoint_and_save(break_point);
     }
 
     int continue_func() {
@@ -213,7 +234,7 @@ class Debugger {
             Breakpoint temp_break_point;
             temp_break_point.addr = return_address;
 
-            create_breakpoint(temp_break_point);
+            create_breakpoint_and_save(temp_break_point);
         }
 
         return continue_func();
@@ -252,12 +273,13 @@ class Debugger {
             Breakpoint break_point;
             break_point.addr = regs.rip + next_instruction_info[0].size;
 
-            create_breakpoint(break_point);
-            break_points.emplace_back(break_point);
+            create_breakpoint_and_save(break_point);
 
+            cs_free(next_instruction_info, n);
             return continue_func();
         }
 
+        cs_free(next_instruction_info, n);
         return step_in();
     }
 
@@ -268,7 +290,29 @@ class Debugger {
         }
     }
 
-    bool is_child_process_alive() {
+    void print_registers(
+        const std::vector<std::pair<std::string, unsigned long long>>& registers_info) {
+
+        for(const auto& it : registers_info) {
+            std::cout << it.first << " value :\t\t" << std::hex << std::setfill('0')
+                      << std::setw(sizeof(long int) * 2) << it.second << std::endl;
+        }
+    }
+
+    void show_registers_state() {
+        user_regs_struct regs {};
+        ptrace(PTRACE_GETREGS, child_pid, 0, &regs);
+
+        std::cout << "Registers state: " << std::endl;
+        print_registers({{ "rax", regs.rax }, { "rcx", regs.rcx },
+                         { "rdx", regs.rdx }, { "rsi", regs.rsi },
+                         { "rdi", regs.rdi }, { "rip", regs.rip },
+                         { "cs", regs.cs },   { "rsp", regs.rsp },
+                         { "ss", regs.ss },
+        });
+    }
+
+    [[nodiscard]] bool is_child_process_alive() const {
         return !(WIFEXITED(child_status) || WIFSIGNALED(child_status));
     }
 
@@ -329,6 +373,10 @@ public:
                     show_breakpoints();
                     break;
                 }
+                case UserCommands::ShowRegistersState: {
+                    show_registers_state();
+                    break;
+                }
                 default:
                     std::cout << "Wrong command" << std::endl;
             }
@@ -341,7 +389,7 @@ void run_child(const char* target_name) {
         std::cerr << "ptrace: Can't attach to the child process" << std::endl;
         return;
     }
-    execl(target_name, target_name);
+    execl(target_name, target_name, nullptr);
 }
 
 int main(int argc, char* argv[]) {
