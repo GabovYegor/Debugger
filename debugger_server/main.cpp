@@ -1,7 +1,6 @@
 #include <cstring>
 #include <iomanip>
 #include <sys/ptrace.h>
-#include <sys/types.h>
 #include <sys/wait.h>
 #include <sys/user.h>
 #include <unistd.h>
@@ -31,7 +30,7 @@ public:
         cs_insn *insn;
 
         if (cs_open(CS_ARCH_X86, CS_MODE_64, &handle) != CS_ERR_OK) {
-            std::cerr << "Failed to initialize Capstone" << std::endl;
+            std::cout << "Failed to initialize Capstone" << std::endl;
             return { nullptr, 0 };
         }
 
@@ -41,19 +40,19 @@ public:
             cs_close(&handle);
             return { insn, count };
         }
-        std::cerr << "Failed to disassemble given code!" << std::endl;
+        std::cout << "Failed to disassemble given code!" << std::endl;
         return { nullptr, 0 };
     }
 
     static long swapBytes64(long value) {
         return ((((value) & 0xff00000000000000l) >> 56) |
-                    (((value) & 0x00ff000000000000l) >> 40) |
-                    (((value) & 0x0000ff0000000000l) >> 24) |
-                    (((value) & 0x000000ff00000000l) >> 8 ) |
-                    (((value) & 0x00000000ff000000l) << 8 ) |
-                    (((value) & 0x0000000000ff0000l) << 24) |
-                    (((value) & 0x000000000000ff00l) << 40) |
-                    (((value) & 0x00000000000000ffl) << 56));
+               (((value) & 0x00ff000000000000l) >> 40)  |
+               (((value) & 0x0000ff0000000000l) >> 24)  |
+               (((value) & 0x000000ff00000000l) >> 8 )  |
+               (((value) & 0x00000000ff000000l) << 8 )  |
+               (((value) & 0x0000000000ff0000l) << 24)  |
+               (((value) & 0x000000000000ff00l) << 40)  |
+               (((value) & 0x00000000000000ffl) << 56));
     }
 };
 
@@ -113,13 +112,13 @@ class Debugger {
         cs_free(instructions, number_of_read_instr);
     }
 
-    unsigned long long get_RIP() {
+    unsigned long long get_RIP() const {
         user_regs_struct regs {};
         ptrace(PTRACE_GETREGS, child_pid, 0, &regs);
         return regs.rip;
     }
 
-    std::vector<uint8_t> get_next_instructions(const size_t max_number_of_instructions_to_read) {
+    std::vector<uint8_t> get_next_instructions(const size_t max_number_of_instructions_to_read) const {
         const auto rip_value = get_RIP();
         std::vector<long> rip_data;
         for(int i = 0; i < max_number_of_instructions_to_read *
@@ -144,7 +143,7 @@ class Debugger {
         return Utilities::string_to_bytes(rip_commands);
     }
 
-    UserCommands convert_user_input_to_UserCommands(const std::string& user_input) {
+    static UserCommands convert_user_input_to_UserCommands(const std::string& user_input) {
         if(user_input == "set_breakpoint") {
             return UserCommands::SetBreakPoint;
         }
@@ -173,12 +172,12 @@ class Debugger {
     }
 
     void define_child_process_return_address() {
-        user_regs_struct regs;
+        user_regs_struct regs {};
         ptrace(PTRACE_GETREGS, child_pid, nullptr, &regs);
         child_process_return_address = ptrace(PTRACE_PEEKDATA, child_pid, (void*)regs.rsp, nullptr);
     }
 
-    Breakpoint create_breakpoint(Breakpoint breakpoint_info) {
+    Breakpoint create_breakpoint(Breakpoint breakpoint_info) const {
         breakpoint_info.orig_data = ptrace(PTRACE_PEEKTEXT, child_pid, breakpoint_info.addr, 0);
         ptrace(PTRACE_POKETEXT, child_pid, breakpoint_info.addr,
             (breakpoint_info.orig_data & ~0xFF) | 0xCC);
@@ -190,13 +189,13 @@ class Debugger {
         break_points.emplace_back(breakpoint_info);
     }
 
-    void remove_breakpoint(Breakpoint breakpoint_info) {
+    void remove_breakpoint(Breakpoint breakpoint_info) const {
         ptrace(PTRACE_POKETEXT, child_pid, breakpoint_info.addr);
     }
 
     void await_breakpoint() {
         // Breakpoint was triggered
-        user_regs_struct regs;
+        user_regs_struct regs {};
         ptrace(PTRACE_GETREGS, child_pid, 0, &regs);
         --regs.rip;
         ptrace(PTRACE_SETREGS, child_pid, 0, &regs);
@@ -216,6 +215,8 @@ class Debugger {
         std::cin >> std::hex >> break_point.addr;
 
         create_breakpoint_and_save(break_point);
+        std::cout << "Breakpoint was successfully created at the address: "
+                  << std::hex << break_point.addr << std::endl;
     }
 
     int continue_func() {
@@ -247,7 +248,7 @@ class Debugger {
 
     int step_in() {
         if (ptrace(PTRACE_SINGLESTEP, child_pid, 0, 0) < 0) {
-            std::cerr << "Can't execute single step. Exit..." << std::endl;
+            std::cout << "Can't execute single step. Exit..." << std::endl;
             return 1;
         }
         wait(&child_status);
@@ -261,9 +262,9 @@ class Debugger {
     }
 
     int step_over() {
-        // Need to verify that the next instruction in call.
+        // Need to verify that the next instruction is "call"
         // Otherwise we could have an issue (e.g. with jmp's)
-        const auto [next_instruction_info, n] =
+        const auto [next_instruction_info, number_of_read_instrs] =
             Utilities::disassemble(get_next_instructions(1), get_RIP(), 1);
 
         if(next_instruction_info == nullptr) {
@@ -280,31 +281,31 @@ class Debugger {
 
             create_breakpoint_and_save(break_point);
 
-            cs_free(next_instruction_info, n);
+            cs_free(next_instruction_info, number_of_read_instrs);
             return continue_func();
         }
 
-        cs_free(next_instruction_info, n);
+        cs_free(next_instruction_info, number_of_read_instrs);
         return step_in();
     }
 
     void show_breakpoints() {
         std::cout << "List of breakpoints: " << std::endl;
-        for(const auto&[addr, orig_data] : break_points) {
+        for(const auto& [addr, orig_data] : break_points) {
             std::cout << "Address: " << std::hex << addr << std::endl;
         }
     }
 
-    void print_registers(
+    static void print_registers(
         const std::vector<std::pair<std::string, unsigned long long>>& registers_info) {
 
-        for(const auto& it : registers_info) {
-            std::cout << it.first << " value :\t\t" << std::hex << std::setfill('0')
-                      << std::setw(sizeof(long int) * 2) << it.second << std::endl;
+        for(const auto&[reg_name, reg_value] : registers_info) {
+            std::cout << reg_name << " value :\t\t" << std::hex << std::setfill('0')
+                      << std::setw(sizeof(long int) * 2) << reg_value << std::endl;
         }
     }
 
-    void show_registers_state() {
+    void show_registers_state() const {
         user_regs_struct regs {};
         ptrace(PTRACE_GETREGS, child_pid, 0, &regs);
 
@@ -328,7 +329,7 @@ public:
         return debugger;
     }
 
-    void print_help() {
+    static void print_help() {
         std::cout << "List of available commands: " << std::endl;
         std::cout << "\tset_breakpoint [address]" << std::endl;
         std::cout << "\tcontinue" << std::endl;
@@ -350,6 +351,7 @@ public:
         // For step_out
         define_child_process_return_address();
 
+        print_help();
         print_near_code();
 
         std::string user_input;
@@ -407,7 +409,7 @@ public:
 
 void run_child(const char* target_name) {
     if (ptrace(PTRACE_TRACEME, 0, nullptr, nullptr) < 0) {
-        std::cerr << "ptrace: Can't attach to the child process" << std::endl;
+        std::cout << "ptrace: Can't attach to the child process" << std::endl;
         return;
     }
     execl(target_name, target_name, nullptr);
@@ -420,7 +422,7 @@ int main(int argc, char* argv[]) {
         return 0;
     }
 
-    pid_t child_pid = fork();
+    const pid_t child_pid = fork();
     if (child_pid == 0) {
         run_child(argv[1]);
     }
@@ -429,8 +431,8 @@ int main(int argc, char* argv[]) {
         debugger.run();
     }
     else {
-        perror("fork");
-        return -1;
+        std::cout << "fork() finished with an error" << std::endl;
+        return 1;
     }
     return 0;
 }

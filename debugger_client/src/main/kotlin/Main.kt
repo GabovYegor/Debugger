@@ -6,11 +6,6 @@ import java.io.OutputStreamWriter
 import kotlin.system.exitProcess
 
 fun main(args: Array<String>): Unit = runBlocking {
-    println("Command-line arguments:")
-    for (arg in args) {
-        println(arg)
-    }
-
     if(args.size != 2) {
         println("Wrong command line params. Usage: [/path/to/debugger] [/path/to/executable/to/debug]")
         exitProcess(0)
