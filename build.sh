@@ -16,6 +16,9 @@ snap install --classic kotlin
 # 3. Gradle
 snap install gradle --classic
 
+# 4. CMake
+apt install cmake
+
 cmake -S ./ -B debugger_output && cmake --build debugger_output/
 mkdir debugger_client_output && cd debugger_client_output
 gradle init --type kotlin-application --dsl kotlin < ../debugger_client/gradle_input.txt
