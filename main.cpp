@@ -10,16 +10,13 @@
 #include <capstone/capstone.h>
 #include <utility>
 
-constexpr size_t max_instruction_size = 15;
-constexpr size_t number_of_instructions_to_show = 20;
-
 class Utilities {
 public:
     static std::vector<uint8_t> string_to_bytes(const std::string& hex) {
         std::vector<uint8_t> bytes;
         for (size_t i = 0; i < hex.length(); i += 2) {
             std::string byteString = hex.substr(i, 2);
-            uint8_t byte = (uint8_t)strtol(byteString.c_str(), nullptr, 16);
+            const auto byte = static_cast<uint8_t>(strtol(byteString.c_str(), nullptr, 16));
             bytes.push_back(byte);
         }
         return bytes;
@@ -71,8 +68,10 @@ class Debugger {
 
     long child_process_return_address = 0;
     pid_t child_pid = 0;
-    int wait_status = 0;
+    int child_status = 0;
     std::vector<Breakpoint> break_points;
+    constexpr size_t max_instruction_size = 15;
+    constexpr size_t number_of_instructions_to_show = 20;
 
     enum class UserCommands {
         SetBreakPoint,
@@ -88,6 +87,10 @@ class Debugger {
         const auto [instructions, number_of_read_instr] = Utilities::disassemble(
             get_next_instructions(number_of_instructions_to_show), get_RIP(),
             number_of_instructions_to_show);
+
+        if(instructions == nullptr) {
+            return;
+        }
 
         for (size_t i = 0; i < number_of_read_instr; i++) {
             std::cout << "0x" << std::hex << instructions[i].address << ":\t";
@@ -191,21 +194,20 @@ class Debugger {
 
     int continue_func() {
         ptrace(PTRACE_CONT, child_pid, 0, 0);
-        wait(&wait_status);
+        wait(&child_status);
 
-        // TODO: Create function for this
-        if(!WIFSTOPPED(wait_status))
+        if(!is_child_process_alive()) {
             return 1;
-
+        }
         await_breakpoint();
 
         return 0;
     }
 
     int step_out() {
-        user_regs_struct regs;
+        user_regs_struct regs {};
         ptrace(PTRACE_GETREGS, child_pid, nullptr, &regs);
-        const auto return_address = ptrace(PTRACE_PEEKDATA, child_pid, (void*)regs.rsp, nullptr);
+        const auto return_address = ptrace(PTRACE_PEEKDATA, child_pid, regs.rsp, nullptr);
 
         if(return_address != child_process_return_address) {
             Breakpoint temp_break_point;
@@ -214,50 +216,49 @@ class Debugger {
             create_breakpoint(temp_break_point);
         }
 
-        if(continue_func()) {
-            return 1;
-        }
-        return 0;
+        return continue_func();
     }
 
     int step_in() {
         if (ptrace(PTRACE_SINGLESTEP, child_pid, 0, 0) < 0) {
-            std::cerr << "ptrace" << std::endl;
+            std::cerr << "Can't execute single step. Exit..." << std::endl;
             return 1;
         }
-        /* Wait for child to stop on its next instruction */
-        wait(&wait_status);
+        wait(&child_status);
 
-        // TODO:
-        if(!WIFSTOPPED(wait_status))
+        if(!is_child_process_alive()) {
             return 1;
+        }
 
         print_near_code();
         return 0;
     }
 
     int step_over() {
+        // Need to verify that the next instruction in call.
+        // Otherwise we could have an issue (e.g. with jmp's)
         const auto [next_instruction_info, n] =
             Utilities::disassemble(get_next_instructions(1), get_RIP(), 1);
+
+        if(next_instruction_info == nullptr) {
+            std::cout << "Step over is canceled" << std::endl;
+            return 0;
+        }
 
         if(std::strcmp(next_instruction_info[0].mnemonic, "call") == 0) {
             user_regs_struct regs {};
             ptrace(PTRACE_GETREGS, child_pid, 0, &regs);
 
-            Breakpoint temp_break_point;
-            temp_break_point.addr = regs.rip + next_instruction_info[0].size;
+            Breakpoint break_point;
+            break_point.addr = regs.rip + next_instruction_info[0].size;
 
-            create_breakpoint(temp_break_point);
-            break_points.emplace_back(temp_break_point);
+            create_breakpoint(break_point);
+            break_points.emplace_back(break_point);
 
-            if(continue_func()) {
-                return 1;
-            }
+            return continue_func();
         }
-        else {
-            return step_in();
-        }
-        return 0;
+
+        return step_in();
     }
 
     void show_breakpoints() {
@@ -267,6 +268,10 @@ class Debugger {
         }
     }
 
+    bool is_child_process_alive() {
+        return !(WIFEXITED(child_status) || WIFSIGNALED(child_status));
+    }
+
 public:
     static Debugger instance(const pid_t child_pid) {
         static Debugger debugger;
@@ -274,16 +279,19 @@ public:
         return debugger;
     }
 
-    int run() {
-        wait(&wait_status);
-        // Check wait_status value;
+    void run() {
+        wait(&child_status);
+        if(!is_child_process_alive()) {
+            std::cout << "Child process wasn't started. Nothing to debug" << std::endl;
+            return;
+        }
 
+        // For step_out
         define_child_process_return_address();
 
         print_near_code();
 
         std::string user_input;
-
         while (true) {
             std::cin >> user_input;
 
@@ -294,24 +302,26 @@ public:
                 }
                 case UserCommands::ContinueExecution : {
                     if(continue_func()) {
-                        return 1;
+                        return;
                     }
                     break;
                 }
                 case UserCommands::StepOut : {
                     if(step_out()) {
-                        return 1;
+                        return;
                     }
                     break;
                 }
                 case UserCommands::StepIn : {
-                    step_in();
+                    if(step_in()) {
+                        return;
+                    }
                     break;
                 }
                 // Should work only for call asm instruction
                 case UserCommands::StepOver : {
                     if(step_over()) {
-                        return 1;
+                        return;
                     }
                     break;
                 }
@@ -326,24 +336,24 @@ public:
     }
 };
 
-void run_target(const char* target_name) {
+void run_child(const char* target_name) {
     if (ptrace(PTRACE_TRACEME, 0, nullptr, nullptr) < 0) {
-        perror("ptrace");
+        std::cerr << "ptrace: Can't attach to the child process" << std::endl;
         return;
     }
-
-    // TODO: Do we need nullptr?
-    execl(target_name, target_name, nullptr);
+    execl(target_name, target_name);
 }
 
 int main(int argc, char* argv[]) {
     if(argc != 2) {
-        std::cout << "Wrong input" << std::endl;
+        std::cout << "Wrong command line params. Usage: "
+                  << argv[0] << " [/path/to/executable/to/debug]" << std::endl;
+        return 0;
     }
 
     pid_t child_pid = fork();
     if (child_pid == 0) {
-        run_target(argv[1]);
+        run_child(argv[1]);
     }
     else if (child_pid > 0) {
         Debugger debugger = Debugger::instance(child_pid);
