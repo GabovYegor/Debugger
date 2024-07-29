@@ -3,6 +3,7 @@ import kotlinx.coroutines.channels.Channel
 import java.io.BufferedReader
 import java.io.InputStreamReader
 import java.io.OutputStreamWriter
+import kotlin.system.exitProcess
 
 fun main(args: Array<String>): Unit = runBlocking {
     println("Command-line arguments:")
@@ -12,6 +13,7 @@ fun main(args: Array<String>): Unit = runBlocking {
 
     if(args.size != 2) {
         println("Wrong command line params. Usage: [/path/to/debugger] [/path/to/executable/to/debug]")
+        exitProcess(0)
     }
 
     val debugger = args[0]
@@ -28,6 +30,11 @@ fun main(args: Array<String>): Unit = runBlocking {
     // Read process data async
     val readJob = launch(Dispatchers.IO) {
         while (isActive) {
+            if(!process.isAlive)
+            {
+                break;
+            }
+            
             if(!reader.ready()) {
                 channel.send(Unit)
             }

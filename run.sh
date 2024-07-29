@@ -1,6 +1,6 @@
 cd debugger_client_output
 
-input_str="../debugger_output/debugger $1"
-./gradlew run --console=plain --args="$input_str"
+input_params="../debugger_server_output/debugger $1"
+./gradlew run --console=plain --args="$input_params"
 
 cd ..

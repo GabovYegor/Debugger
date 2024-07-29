@@ -9,6 +9,7 @@
 #include <vector>
 #include <capstone/capstone.h>
 #include <utility>
+#include <algorithm>
 
 class Utilities {
 public:
@@ -37,8 +38,6 @@ public:
         const auto count = cs_disasm(handle, code.data(), code.size(), address,
                                      number_of_instructions_to_disassemble, &insn);
         if (count > 0) {
-            // TODO: Free insn. Unique_ptr???
-            // cs_free(insn, count);
             cs_close(&handle);
             return { insn, count };
         }
