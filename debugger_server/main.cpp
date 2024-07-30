@@ -1,21 +1,20 @@
 #include <cstring>
 #include <iomanip>
+#include <iostream>
+#include <vector>
+#include <utility>
+#include <algorithm>
 #include <sys/ptrace.h>
 #include <sys/wait.h>
 #include <sys/user.h>
 #include <unistd.h>
-#include <iostream>
-#include <vector>
 #include <capstone/capstone.h>
-#include <utility>
-#include <algorithm>
 
-class Utilities {
-public:
-    static std::vector<uint8_t> string_to_bytes(const std::string& hex) {
+namespace Utilities {
+    static std::vector<uint8_t> string_to_bytes(const std::string& str) {
         std::vector<uint8_t> bytes;
-        for (size_t i = 0; i < hex.length(); i += 2) {
-            std::string byteString = hex.substr(i, 2);
+        for (size_t i = 0; i < str.length(); i += 2) {
+            std::string byteString = str.substr(i, 2);
             const auto byte = static_cast<uint8_t>(strtol(byteString.c_str(), nullptr, 16));
             bytes.push_back(byte);
         }
@@ -40,29 +39,31 @@ public:
             cs_close(&handle);
             return { insn, count };
         }
+
+        cs_free(insn, count);
         std::cout << "Failed to disassemble given code!" << std::endl;
         return { nullptr, 0 };
     }
 
-    static long swapBytes64(long value) {
+    static long swap_bytes64(const long value) {
         return ((((value) & 0xff00000000000000l) >> 56) |
-               (((value) & 0x00ff000000000000l) >> 40)  |
-               (((value) & 0x0000ff0000000000l) >> 24)  |
-               (((value) & 0x000000ff00000000l) >> 8 )  |
-               (((value) & 0x00000000ff000000l) << 8 )  |
-               (((value) & 0x0000000000ff0000l) << 24)  |
-               (((value) & 0x000000000000ff00l) << 40)  |
-               (((value) & 0x00000000000000ffl) << 56));
+                (((value) & 0x00ff000000000000l) >> 40) |
+                (((value) & 0x0000ff0000000000l) >> 24) |
+                (((value) & 0x000000ff00000000l) >> 8 ) |
+                (((value) & 0x00000000ff000000l) << 8 ) |
+                (((value) & 0x0000000000ff0000l) << 24) |
+                (((value) & 0x000000000000ff00l) << 40) |
+                (((value) & 0x00000000000000ffl) << 56));
     }
 
     static std::string ltrim(const std::string &str) {
         const auto start = str.find_first_not_of(' ');
-        return (start == std::string::npos) ? "" : str.substr(start);
+        return start == std::string::npos ? "" : str.substr(start);
     }
 
     static std::string rtrim(const std::string& str) {
         const auto end = str.find_last_not_of(' ');
-        return (end == std::string::npos) ? "" : str.substr(0, end + 1);
+        return end == std::string::npos ? "" : str.substr(0, end + 1);
     }
 
     static std::string trim(const std::string& str) {
@@ -83,7 +84,7 @@ class Debugger {
         long orig_data = 0;
     };
 
-    Debugger() = default;
+    explicit Debugger(const pid_t child_pid) : child_pid(child_pid) {}
 
     long child_process_return_address = 0;
     pid_t child_pid = 0;
@@ -111,7 +112,7 @@ class Debugger {
         }
 
         const auto [instructions, number_of_read_instr] = Utilities::disassemble(
-            get_next_instructions(number_of_instructions_to_show), get_RIP(),
+            get_next_instructions(number_of_instructions_to_show), get_rip(),
             number_of_instructions_to_show);
 
         // Recover breakpoints
@@ -133,14 +134,14 @@ class Debugger {
         cs_free(instructions, number_of_read_instr);
     }
 
-    unsigned long long get_RIP() const {
+    unsigned long long get_rip() const {
         user_regs_struct regs {};
         ptrace(PTRACE_GETREGS, child_pid, 0, &regs);
         return regs.rip;
     }
 
     std::vector<uint8_t> get_next_instructions(const size_t max_number_of_instructions_to_read) const {
-        const auto rip_value = get_RIP();
+        const auto rip_value = get_rip();
         std::vector<long> rip_data;
         for(int i = 0; i < max_number_of_instructions_to_read *
                            max_instruction_size; ++i) {
@@ -154,7 +155,7 @@ class Debugger {
         std::ostringstream os;
         for(const auto it : rip_data) {
             os << std::hex << std::setfill('0')
-               << std::setw(sizeof(long int) * 2) << Utilities::swapBytes64(it);
+               << std::setw(sizeof(long int) * 2) << Utilities::swap_bytes64(it);
         }
         std::string rip_commands = os.str();
         rip_commands.erase(rip_commands.find_last_not_of('0') + 1);
@@ -197,7 +198,7 @@ class Debugger {
     void define_child_process_return_address() {
         user_regs_struct regs {};
         ptrace(PTRACE_GETREGS, child_pid, nullptr, &regs);
-        child_process_return_address = ptrace(PTRACE_PEEKDATA, child_pid, (void*)regs.rsp, nullptr);
+        child_process_return_address = ptrace(PTRACE_PEEKDATA, child_pid, regs.rsp, nullptr);
     }
 
     Breakpoint create_breakpoint(Breakpoint breakpoint_info) const {
@@ -208,11 +209,20 @@ class Debugger {
     }
 
     void create_breakpoint_and_save(Breakpoint breakpoint_info) {
+        const auto is_new_bp = std::find_if(break_points.begin(), break_points.end(),
+            [breakpoint_info](const Breakpoint bp) {
+                return breakpoint_info.addr == bp.addr;
+            }) == break_points.end();
+
+        if(!is_new_bp) {
+            return;
+        }
+
         breakpoint_info = create_breakpoint(breakpoint_info);
         break_points.emplace_back(breakpoint_info);
     }
 
-    void remove_breakpoint(Breakpoint breakpoint_info) const {
+    void remove_breakpoint(const Breakpoint breakpoint_info) const {
         ptrace(PTRACE_POKETEXT, child_pid, breakpoint_info.addr);
     }
 
@@ -288,7 +298,7 @@ class Debugger {
         // Need to verify that the next instruction is "call"
         // Otherwise we could have an issue (e.g. with jmp's)
         const auto [next_instruction_info, number_of_read_instrs] =
-            Utilities::disassemble(get_next_instructions(1), get_RIP(), 1);
+            Utilities::disassemble(get_next_instructions(1), get_rip(), 1);
 
         if(next_instruction_info == nullptr) {
             std::cout << "Step over is canceled" << std::endl;
@@ -322,7 +332,7 @@ class Debugger {
     static void print_registers(
         const std::vector<std::pair<std::string, unsigned long long>>& registers_info) {
 
-        for(const auto&[reg_name, reg_value] : registers_info) {
+        for(const auto & [reg_name, reg_value] : registers_info) {
             std::cout << reg_name << " value :\t\t" << std::hex << std::setfill('0')
                       << std::setw(sizeof(long int) * 2) << reg_value << std::endl;
         }
@@ -347,8 +357,7 @@ class Debugger {
 
 public:
     static Debugger instance(const pid_t child_pid) {
-        static Debugger debugger;
-        debugger.child_pid = child_pid;
+        static Debugger debugger { child_pid };
         return debugger;
     }
 
@@ -445,7 +454,7 @@ int main(int argc, char* argv[]) {
         return 0;
     }
 
-    const pid_t child_pid = fork();
+    const auto child_pid = fork();
     if (child_pid == 0) {
         run_child(argv[1]);
     }

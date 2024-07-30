@@ -8,6 +8,9 @@ snap install --classic kotlin
 snap install gradle --classic
 
 # Build
+if [ -d debugger_client_output ]; then
+    rm -r debugger_client_output
+fi
 mkdir debugger_client_output && cd debugger_client_output
 gradle init --type kotlin-application --dsl kotlin < ../debugger_client/gradle_input.txt
 rm -r app/
