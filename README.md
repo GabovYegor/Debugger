@@ -18,7 +18,7 @@ The list of dependencies:
 
 ### Run
 1. Go to the project's root directory
-2. Run `sudo ./run.sh <path to executable to debug>`
+2. Run `sudo ./run.sh <full path to executable to debug>`
 
 ### Supported operations
 The `simple-debugger` supports the following operations:
