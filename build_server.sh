@@ -10,7 +10,7 @@ apt-get install cmake
 apt-get install git
 
 # Capstone
-apt-get install libcapstone-dev
+# apt-get install libcapstone-dev
 git clone https://github.com/capstone-engine/capstone.git
 cd capstone
 git checkout v5

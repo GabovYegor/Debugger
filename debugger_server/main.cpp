@@ -54,6 +54,27 @@ public:
                (((value) & 0x000000000000ff00l) << 40)  |
                (((value) & 0x00000000000000ffl) << 56));
     }
+
+    static std::string ltrim(const std::string &str) {
+        const auto start = str.find_first_not_of(' ');
+        return (start == std::string::npos) ? "" : str.substr(start);
+    }
+
+    static std::string rtrim(const std::string& str) {
+        const auto end = str.find_last_not_of(' ');
+        return (end == std::string::npos) ? "" : str.substr(0, end + 1);
+    }
+
+    static std::string trim(const std::string& str) {
+        return rtrim(ltrim(str));
+    }
+
+    static std::string to_lowercase(const std::string& input_str) {
+        std::string result = input_str;
+        std::transform(input_str.begin(), input_str.end(), result.begin(),
+            [](const auto c){ return std::tolower(c); });
+        return result;
+    }
 };
 
 class Debugger {
@@ -144,28 +165,30 @@ class Debugger {
     }
 
     static UserCommands convert_user_input_to_UserCommands(const std::string& user_input) {
-        if(user_input == "set_breakpoint") {
+        const auto processed_string = Utilities::to_lowercase(Utilities::trim(user_input));
+
+        if(processed_string == "set_breakpoint") {
             return UserCommands::SetBreakPoint;
         }
-        if(user_input == "continue") {
+        if(processed_string == "continue") {
             return UserCommands::ContinueExecution;
         }
-        if(user_input == "step_out") {
+        if(processed_string == "step_out") {
             return UserCommands::StepOut;
         }
-        if(user_input == "step_in") {
+        if(processed_string == "step_in") {
             return UserCommands::StepIn;
         }
-        if(user_input == "step_over") {
+        if(processed_string == "step_over") {
             return UserCommands::StepOver;
         }
-        if(user_input == "bp_list") {
+        if(processed_string == "bp_list") {
             return UserCommands::ShowBreakPoints;
         }
-        if(user_input == "show_state") {
+        if(processed_string == "show_state") {
             return UserCommands::ShowRegistersState;
         }
-        if(user_input == "help") {
+        if(processed_string == "help") {
             return UserCommands::Help;
         }
         return UserCommands::InvalidCommand;
