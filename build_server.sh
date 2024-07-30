@@ -9,7 +9,7 @@ apt-get install cmake
 # Git
 apt-get install git
 
-if find /usr/local/lib /usr/lib -name "libcapstone.so"; then
+if find /usr/local/lib /usr/lib -name "libcapstone.so" | grep -q "libcapstone.so"; then
     echo "libcapstone already installed. Please make sure you're using the latest version!"
 else
   # Capstone
