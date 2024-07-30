@@ -125,7 +125,7 @@ class Debugger {
         }
 
         std::cout << "---------------------------------------------------------------" << std::endl;
-        for (size_t i = 0; i < number_of_read_instr; i++) {
+        for (size_t i = 0; i < number_of_read_instr; ++i) {
             std::cout << "0x" << std::hex << instructions[i].address << ":\t";
             std::cout << instructions[i].mnemonic << "\t" << instructions[i].op_str << std::endl;
         }
