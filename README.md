@@ -1,6 +1,6 @@
 ## Simple-debugger
 
-Simple-debugger is an instruction-level debugger with command line interface. Works only on Linux x86_64.
+`Simple-debugger` is an instruction-level debugger with command line interface. Works only on Linux x86_64.
 
 ### Build
 1. Go to the project's root directory
@@ -69,7 +69,7 @@ The debugger-server is written using C++. The debugging works using `ptrace`.
    The `debugger-server` reads and disassemble the next instruction. If the next instruction is "call" then the `debugger-server` set breakpoint at the next after "call" instruction and continue child process execution. Otherwise call `step_in`. 
    
 ### How debugger-client is implemented
-The debugger-client is written in Kotlin. The debugger-client is a simple wrapper around debugger-server. It is assumed that users will interact with `simple-debugger` via `debugger-client`.
+The `debugger-client` is written in Kotlin. The `debugger-client` is a simple wrapper around `debugger-server`. It is assumed that users will interact with `simple-debugger` via `debugger-client`.
 
 The `debugger-client` runs the `debugger-server` process and two coroutines with IO dispatcher to interact with debugger-server. 
 
